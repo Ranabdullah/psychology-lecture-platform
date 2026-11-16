@@ -1,0 +1,15 @@
+node_modules/
+.git/
+.env*
+!.env.example
+.next/
+dist/
+.wrangler/
+.dev.vars*
+*.pem
+*.p12
+*.jks
+*.keystore
+*.log
+backups/
+private/
