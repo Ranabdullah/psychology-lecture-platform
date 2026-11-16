@@ -13,3 +13,5 @@ dist/
 *.log
 backups/
 private/
+
+classroom/wrangler.live.jsonc

@@ -1,0 +1,14 @@
+{
+  "name": "lecture-studio",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-16",
+  "preview_urls": false,
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "ai": { "binding": "AI" },
+  "observability": {"enabled":false},
+  "ratelimits": [
+    {"name":"AUTH_LIMIT","namespace_id":"78123","simple":{"limit":8,"period":60}},
+    {"name":"WORK_LIMIT","namespace_id":"78124","simple":{"limit":18,"period":60}}
+  ],
+  "vars": {"SUPABASE_URL":"", "SUPABASE_PUBLISHABLE_KEY":""}
+}

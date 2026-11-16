@@ -1,7 +1,9 @@
-# Psychology Lecture Knowledge Platform
+# Lecture Studio
 
-Teacher review and student knowledge tools for lecture recordings, transcripts, summaries, search and notes.
+A private classroom app that records or uploads lectures, transcribes the audio, saves five review passes, and gives the teacher an editable outline to publish. Students join by private invitation, read published lectures and write notes for their teacher.
 
-[Try the fictional review workflow](https://psych-lecture-workflow-demo.ranakaharian1.workers.dev/). You can edit a draft, approve it and add a sample note. The walkthrough has no recording or transcription service.
+- [Open Lecture Studio](https://lecture-studio.ranakaharian1.workers.dev/)
+- [Classroom setup and teacher walkthrough](classroom/README.md)
+- [Fictional review walkthrough](https://psych-lecture-workflow-demo.ranakaharian1.workers.dev/)
 
-For the full app, use Node.js 22 or later and a fresh PostgreSQL database. Start with [developer setup](README-FIRST.md), then configure private environment values, apply the Prisma migrations and build. Seed users and lectures are fictional and require passwords you supply.
+The current classroom edition is in `classroom/` and runs on Cloudflare Workers, Workers AI and an isolated Supabase PostgreSQL schema. The original Next.js implementation remains under `src/`; its developer setup is in [README-FIRST.md](README-FIRST.md).
