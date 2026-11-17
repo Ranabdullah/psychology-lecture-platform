@@ -181,11 +181,14 @@ async function processLecture(env,parameters){
   }else if(step===3){
     findings=reportText(await review(env,'Return JSON {findings:string}. Flag proper names, dates, numeric claims and specialised terminology requiring confirmation. Quote the relevant transcript wording.',{transcript:record.transcript}));
   }else{
-    const outline=await review(env,'Return JSON {findings:string,sections:[{heading:string,body:string}]}. Produce clear lecture sections grounded in the transcript. Flag unresolved discrepancies and omit unsupported claims.',{transcript:record.transcript,reviews:checks});
+    const outline=await review(env,'Return JSON {findings:string,sections:[{heading:string,body:string}]}. Start with a section headed "Lecture summary" containing a clear paragraph explaining the lecture. Add "Key takeaways" with 3 to 6 concise points on separate lines. Then create at least two descriptive topic headings with explanatory lecture notes, when supported by the transcript. Use only the transcript. Flag unresolved discrepancies and omit unsupported claims.',{transcript:record.transcript,reviews:checks});
     const draft=sections(outline.sections);
-    const verified=await review(env,'Compare the proposed sections against the transcript. Return JSON {findings:string,sections:[{heading:string,body:string}]}. Remove or label unsupported details. Retain the lecture meaning and flag anything that needs teacher review.',{transcript:record.transcript,sections:draft});
+    const verified=await review(env,'Compare the proposed sections against the transcript. Return JSON {findings:string,sections:[{heading:string,body:string}]}. Keep "Lecture summary" as the first section, "Key takeaways" second, and topic sections after them. Remove or label unsupported details. Retain the lecture meaning and flag anything that needs teacher review.',{transcript:record.transcript,sections:draft});
     findings=reportText(verified);
     next.sections=sections(verified.sections);
+    if(next.sections[0]?.heading.toLowerCase()!=='lecture summary'||next.sections[1]?.heading.toLowerCase()!=='key takeaways'){
+      throw error('The outline did not include its summary and key takeaways. Retry the final pass.',503);
+    }
   }
   next.checks=[...checks,{label:reviewNames[step],findings,at:new Date().toISOString()}];
   await db(env,'save_checkpoint',next);

@@ -40,6 +40,7 @@ const authForm=$('#authForm');
 const outlineForm=$('#outlineForm');
 const recordForm=$('#recordForm');
 const api=async(path,data,options={})=>{
+  if(window.LectureDemo) return window.LectureDemo.request(path,data,options);
   const settings={cache:'no-store',...options};
   if(data!==undefined){
     settings.method='POST';
@@ -120,19 +121,22 @@ async function dashboard(refresh=true){
   $('#newLecture').hidden=!teacher;
   const list=$('#lectureList');
   list.replaceChildren();
-  const rows=[...home.lectures].sort((a,b)=>b.created_at.localeCompare(a.created_at));
+  const query=$('#lectureSearch').value.trim().toLowerCase();
+  const rows=[...home.lectures].filter(row=>row.title.toLowerCase().includes(query)).sort((a,b)=>b.created_at.localeCompare(a.created_at));
+  $('#lectureCount').textContent=home.lectures.length+' '+(home.lectures.length===1?'lecture':'lectures');
   for(const row of rows){
     const item=node('li','');
     const label=node('div',row.title);
-    label.append(node('small',row.published?'Published':'Draft'));
+    label.append(node('small',(row.published?'Published':'Draft')+' · '+new Date(row.created_at).toLocaleDateString(undefined,{day:'numeric',month:'short'})));
     item.append(label,button('Open',()=>run(()=>openLecture(row.id))));
     list.append(item);
   }
-  if(!rows.length) list.append(node('li',teacher?'Start by recording a lecture.':'Your teacher has not published a lecture yet.'));
+  if(!rows.length) list.append(node('li',query?'No lectures match your search.':teacher?'Start by recording a lecture.':'Your teacher has not published a lecture yet.'));
   renderStudents();
   pendingChanges=false;
   route('workspace');
 }
+$('#lectureSearch').oninput=()=>run(()=>dashboard(false));
 function renderStudents(){
   const roster=$('#students');
   roster.replaceChildren();
@@ -172,17 +176,18 @@ formHandler($('#inviteForm'),async fields=>{
   share('#inviteResult',result.link,'Your Lecture Studio invitation','Send this private link to '+fields.email+'. It works once and expires in seven days.');
 });
 $('#logout').onclick=()=>run(async()=>{
-  if(working||uploadInProgress||recorder?.state==='recording') return status('Finish the recording or review in progress first.',true);
+  if(working||uploadInProgress||['recording','paused'].includes(recorder?.state)) return status('Finish the recording or review in progress first.',true);
   if((audio||pendingChanges)&&!confirm('Leave the current unsaved work?'))return;
   await api('logout',{});
   location.assign(location.pathname);
 });
 for(const item of document.querySelectorAll('[data-back]')) item.onclick=()=>run(async()=>{
-  if(working||uploadInProgress||recorder?.state==='recording')return status('Finish this action before leaving.',true);
+  if(working||uploadInProgress||['recording','paused'].includes(recorder?.state))return status('Finish this action before leaving.',true);
   if(pendingChanges&&!confirm('Leave without saving these edits?')) return;
   status('');await dashboard();
 });
 $('#newLecture').onclick=()=>{
+  if(window.LectureDemo)return status('The example contains a prepared lesson. Open the private classroom to record your own.');
   if(audio){route('recorder');return;}
   recordForm.reset();uploadingId=null;
   route('recorder');status('');
@@ -219,22 +224,36 @@ $('#startRecording').onclick=()=>run(async()=>{
     mediaStream.getTracks().forEach(track=>track.stop());
     $('#startRecording').disabled=false;$('#stopRecording').disabled=true;$('#audioFile').disabled=false;
     $('#saveRecording').disabled=false;
+    $('#pauseRecording').hidden=true;
     const mime=recorder.mimeType.split(';')[0]||'audio/webm';
     rememberAudio(new Blob(parts,{type:mime}),mime);
   };
-  recorder.onerror=()=>{status('The microphone stopped unexpectedly.',true);if(recorder.state==='recording')recorder.stop();};
+  recorder.onerror=()=>{status('The microphone stopped unexpectedly.',true);if(['recording','paused'].includes(recorder.state))recorder.stop();};
   recorder.start(1000);
   const started=Date.now();
   $('#recordTime').textContent='00:00';
   timer=setInterval(()=>{
-    const seconds=Math.floor((Date.now()-started)/1000);
+    const seconds=Math.floor((Date.now()-started-pausedMilliseconds-(pauseStarted?Date.now()-pauseStarted:0))/1000);
     $('#recordTime').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
   },250);
+  pausedMilliseconds=0;
+  pauseStarted=0;
+  $('#pauseRecording').hidden=false;
+  $('#pauseRecording').textContent='Pause';
   uploadingId=null;
   $('#startRecording').disabled=true;$('#stopRecording').disabled=false;$('#audioFile').disabled=true;$('#saveRecording').disabled=true;
   status('Recording…');
 });
-$('#stopRecording').onclick=()=>{if(recorder?.state==='recording'){recorder.stop();status('Recording stopped. Save it to continue.');}};
+let pauseStarted=0;
+let pausedMilliseconds=0;
+$('#pauseRecording').onclick=()=>{
+  if(recorder?.state==='recording'){
+    recorder.pause();pauseStarted=Date.now();$('#pauseRecording').textContent='Resume';status('Recording paused.');
+  }else if(recorder?.state==='paused'){
+    pausedMilliseconds+=Date.now()-pauseStarted;pauseStarted=0;recorder.resume();$('#pauseRecording').textContent='Pause';status('Recording…');
+  }
+};
+$('#stopRecording').onclick=()=>{if(recorder&&['recording','paused'].includes(recorder.state)){recorder.stop();status('Recording stopped. Save it to continue.');}};
 $('#audioFile').onchange=event=>{
   const file=event.target.files[0];
   if(!file)return;
@@ -270,7 +289,7 @@ async function openLecture(id){
   const source=$('#sourceAudio');
   source.hidden=!lecture.audio_parts;
   $('#audioUnavailable').hidden=!!lecture.audio_parts;
-  if(lecture.audio_parts)source.src='/api/lecture/'+id+'/audio';
+  if(lecture.audio_parts)source.src=window.LectureDemo?'example-lecture.wav':'/api/lecture/'+id+'/audio';
   const teacher=home.me.role==='teacher';
   $('#teacherReview').hidden=!teacher;
   $('#studentReview').hidden=teacher;
@@ -289,27 +308,78 @@ async function openLecture(id){
     }
     if(!notes.children.length)notes.append(node('p','Student notes will appear here.'));
   }else{
-    const sections=$('#publishedSections');
-    sections.replaceChildren();
-    for(const section of lecture.sections||[]){
-      const item=node('article','','published-row');
-      item.append(node('h3',section.heading),node('p',section.body));
-      sections.append(item);
-    }
     $('#noteForm').elements.body.value=lecture.note||'';
   }
+  for(const tab of document.querySelectorAll('[data-detail-tab]')){
+    tab.hidden=!teacher&&['review','edit'].includes(tab.dataset.detailTab);
+  }
+  renderLesson();
+  detailTab('lesson');
   route('detail');
 }
+function detailTab(tab){
+  for(const button of document.querySelectorAll('[data-detail-tab]'))button.setAttribute('aria-pressed',button.dataset.detailTab===tab);
+  for(const panel of document.querySelectorAll('[data-detail-panel]'))panel.hidden=panel.dataset.detailPanel!==tab;
+}
+for(const tab of document.querySelectorAll('[data-detail-tab]'))tab.onclick=()=>detailTab(tab.dataset.detailTab);
+function renderLesson(){
+  const sections=lecture.sections||[];
+  const container=$('#lessonSections');
+  const contents=$('#lessonContents');
+  container.replaceChildren();contents.replaceChildren();
+  const words=sections.reduce((count,section)=>count+section.body.trim().split(/\s+/).filter(Boolean).length,0);
+  $('#lessonMeta').textContent=sections.length?sections.length+' sections · '+Math.max(1,Math.ceil(words/200))+' min read':'The structured lesson will appear after the review passes.';
+  if(!sections.length){
+    const empty=node('div','','empty-lesson');
+    empty.append(node('h3','Your lesson starts with the recording.'),node('p','Run transcription and checks, then review the summary and topic headings.','muted'));
+    if(home.me.role==='teacher')empty.append(button('Open transcript & checks',()=>detailTab('review')));
+    container.append(empty);
+    return;
+  }
+  sections.forEach((section,index)=>{
+    const type=section.heading.toLowerCase();
+    const article=node('article','','lesson-section'+(type==='lecture summary'?' summary-section':type==='key takeaways'?' takeaways':''));
+    article.id='lesson-section-'+index;
+    article.append(node('h3',section.heading));
+    if(type==='key takeaways'){
+      const list=document.createElement('ul');
+      section.body.split('\n').map(value=>value.replace(/^\s*(?:[-•*]|\d+[.)])\s*/,'').trim()).filter(Boolean).forEach(value=>list.append(node('li',value)));
+      article.append(list);
+    }else article.append(node('p',section.body));
+    container.append(article);
+    const item=node('a',section.heading);item.href='#'+article.id;contents.append(item);
+  });
+}
+$('#exportLesson').onclick=()=>{
+  if(!lecture.sections?.length)return status('Generate or write lesson sections first.');
+  const text=lecture.title+'\n\n'+lecture.sections.map(row=>row.heading+'\n'+row.body).join('\n\n');
+  const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));
+  const anchor=document.createElement('a');anchor.href=url;anchor.download=(lecture.title.replace(/[^\p{L}\p{N} _-]/gu,'').slice(0,70)||'lecture')+'.txt';anchor.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+$('#printLesson').onclick=()=>window.print();
+$('#copyTranscript').onclick=()=>run(async()=>{
+  if(!lecture.transcript)return status('The source transcript is not available yet.');
+  await navigator.clipboard.writeText(lecture.transcript);status('Transcript copied.');
+});
 function renderChecks(){
   const list=$('#checkList');
   list.replaceChildren();
   for(const check of lecture.checks||[]){
-    const row=node('li','');row.append(node('strong',check.label),node('p',check.findings));list.append(row);
+    const row=node('li','');
+    const details=document.createElement('details');details.append(node('summary',check.label),node('p',check.findings));
+    row.append(details);list.append(row);
   }
   if(!list.children.length)list.append(node('li','Transcription has not started.'));
   $('#transcript').textContent=lecture.transcript||'The first transcription will appear here.';
   $('#process').hidden=!!lecture.published||lecture.checks?.length===5;
   $('#process').disabled=working||!lecture.audio_parts;
+  const count=lecture.checks?.length||0;
+  $('#process').textContent=lecture.transcript?'Continue review & build lesson':'Transcribe & build lesson';
+  $('#checkCount').textContent=count+' of 5 complete';
+  $('#reviewProgress').value=count;
+  for(const control of outlineForm.querySelectorAll('input,textarea,button'))control.disabled=working;
+  $('#deleteLecture').disabled=working;
   $('#share').hidden=!lecture.published;
   $('#reviewConfirm').hidden=!!lecture.published;
   $('#publish').hidden=!!lecture.published;
@@ -317,6 +387,7 @@ function renderChecks(){
 }
 function updatePublish(){
   $('#publish').disabled=working||pendingChanges||lecture?.checks?.length!==5||!$('#teacherConfirmed').checked;
+  $('#editState').textContent=pendingChanges?'Unsaved changes':'Saved';
 }
 $('#teacherConfirmed').onchange=updatePublish;
 function sectionInput(section={heading:'',body:''}){
@@ -327,7 +398,13 @@ function sectionInput(section={heading:'',body:''}){
   const bodyLabel=node('label','Content');
   const text=document.createElement('textarea');text.required=true;text.maxLength=4500;text.value=section.body;text.className='body';
   bodyLabel.append(text);
-  row.append(heading,bodyLabel,button('Remove section',()=>{row.remove();pendingChanges=true;updatePublish();}));
+  const tools=node('div','','outline-tools');
+  tools.append(node('small','Section'),button('Move up',()=>{
+    if(row.previousElementSibling){row.previousElementSibling.before(row);pendingChanges=true;updatePublish();}
+  }),button('Move down',()=>{
+    if(row.nextElementSibling){row.nextElementSibling.after(row);pendingChanges=true;updatePublish();}
+  }),button('Remove',()=>{row.remove();pendingChanges=true;updatePublish();}));
+  row.append(heading,bodyLabel,tools);
   $('#outline').append(row);
 }
 function renderOutline(){
@@ -341,6 +418,7 @@ $('#addSection').onclick=()=>{
   sectionInput();pendingChanges=true;updatePublish();
 };
 formHandler(outlineForm,async fields=>{
+  if(working)return;
   const sections=[...$('#outline').querySelectorAll('.outline-row')].map(row=>({heading:row.querySelector('.heading').value,body:row.querySelector('.body').value}));
   await api('lecture/'+lecture.id+'/edit',{title:fields.title,sections});
   await openLecture(lecture.id);
@@ -350,8 +428,7 @@ $('#process').onclick=()=>run(async()=>{
   if(working)return;
   if(pendingChanges&&!confirm('Start review passes and replace unsaved edits?')) return;
   working=true;
-  $('#process').disabled=true;
-  updatePublish();
+  renderChecks();
   const id=lecture.id;
   try{
     let step=lecture.checks?.length||0;
@@ -365,6 +442,8 @@ $('#process').onclick=()=>run(async()=>{
     $('#workStatus').textContent='Five passes saved. Listen to flagged passages and edit the lecture before publishing.';
     pendingChanges=false;
     renderOutline();
+    renderLesson();
+    detailTab('lesson');
   } finally {working=false;renderChecks();}
 });
 $('#publish').onclick=()=>run(async()=>{
@@ -385,6 +464,6 @@ formHandler($('#noteForm'),async fields=>{
   status('Notes saved for you and your teacher.');
 });
 window.addEventListener('beforeunload',event=>{
-  if(audio||pendingChanges||recorder?.state==='recording'||uploadInProgress){event.preventDefault();event.returnValue='';}
+  if(audio||pendingChanges||['recording','paused'].includes(recorder?.state)||uploadInProgress||working){event.preventDefault();event.returnValue='';}
 });
 enterClassroom().catch(error=>{route('auth');if(error.status!==401)status(error.message,true);});
