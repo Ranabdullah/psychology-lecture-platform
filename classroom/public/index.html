@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
-<title>Lecture Studio</title><link rel="stylesheet" href="style.css"><script src="demo.js" defer></script><script src="app.js" defer></script></head>
+<title>Lecture Studio</title><link rel="stylesheet" href="style.css"><script src="demo.js" defer></script><script src="capture.js" defer></script><script src="app.js" defer></script></head>
 <body>
 <header><a href="./" class="brand"><span aria-hidden="true">≋</span>Lecture Studio</a><div id="userBar" hidden><span id="user"></span> <button type="button" id="logout">Sign out</button></div></header>
 <main><aside class="demo-banner" id="demoBanner" hidden>Example lecture workspace · Edits stay in this browser <a href="./">Open private classroom</a> <button id="resetDemo" type="button">Reset example</button></aside>
@@ -23,20 +23,20 @@
 </div></section>
 
 <section id="recorder" hidden><div class="workflow-track"><span class="active">Record</span><span>Transcribe</span><span>Review</span><span>Publish</span></div>
-<div class="page-heading"><div><h1>Record a lecture</h1><p class="muted">Speak into the microphone or upload an audio file. A recording can be up to 8 MB.</p></div><button type="button" data-back>Back to lectures</button></div>
+<div class="page-heading"><div><h1>Record a lecture</h1><p class="muted">Speak into the microphone or upload an audio file. Recording saves in two-minute segments, up to 120 minutes or 64 MB. For uploads, choose ordered clips of up to three minutes and 8 MB each.</p></div><button type="button" data-back>Back to lectures</button></div>
 <form id="recordForm" class="card">
 <label>Lecture title<input name="title" maxlength="150" required placeholder="e.g. Introduction to learning"></label>
 <label class="check"><input name="consent" type="checkbox" required> I have permission to record and process this lecture.</label>
 <div class="recorder-controls"><button type="button" id="startRecording">Start recording</button><button type="button" id="pauseRecording" hidden>Pause</button><button type="button" id="stopRecording" disabled>Stop recording</button><strong id="recordTime" aria-live="off">00:00</strong></div>
-<label class="file-label">Or choose an audio file <input type="file" id="audioFile" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg,.webm,.ogg,.m4a,.wav,.mp3"></label>
-<p id="audioSelection" aria-live="polite"></p><audio id="localAudio" controls hidden></audio>
+<label class="file-label">Or choose an audio file <input type="file" id="audioFile" multiple accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg,.webm,.ogg,.m4a,.wav,.mp3"></label>
+<p class="muted">Keep this page open while recording or uploading. A recovery copy stays in this browser until upload succeeds. Microphone cleanup depends on device support.</p><button type="button" id="recoverRecording">Restore local recovery</button><p id="audioSelection" aria-live="polite"></p><audio id="localAudio" controls hidden></audio>
 <div class="actions"><button class="primary" id="saveRecording">Save recording</button><a id="downloadAudio" class="button" download="lecture.webm" hidden>Download recovery copy</a></div>
 </form></section>
 
 <section id="detail" hidden>
 <div class="page-heading"><div><h1 id="lectureTitle"></h1><p class="muted" id="lectureStatus"></p></div><button type="button" data-back>Back to lectures</button></div>
-<div class="card audio-card"><span class="eyebrow">SOURCE RECORDING</span><audio id="sourceAudio" controls preload="none"></audio><p id="audioUnavailable" hidden>Audio is unavailable for this draft.</p></div>
-<nav class="detail-tabs" id="detailTabs" aria-label="Lecture views">
+<div class="card audio-card"><span class="eyebrow">SOURCE RECORDING</span><label id="clipPickerLabel" hidden>Recording segment<select id="clipPicker"></select></label><audio id="sourceAudio" controls preload="none"></audio><p id="audioUnavailable" hidden>Audio is unavailable for this draft.</p></div>
+<aside id="backgroundStatus" class="card" hidden><strong id="backgroundMessage"></strong><progress id="backgroundProgress" max="100" value="0"></progress><p class="muted">Processing continues if you close this tab. Reopen the lecture to see saved progress. Browser alerts work while this page is open.</p><button type="button" id="notifyProcessing">Enable completion alerts</button><div id="segmentFindings"></div></aside><nav class="detail-tabs" id="detailTabs" aria-label="Lecture views">
 <button type="button" data-detail-tab="lesson" aria-pressed="true">Lesson</button>
 <button type="button" data-detail-tab="review">Transcript &amp; checks</button>
 <button type="button" data-detail-tab="edit">Edit lesson</button>
@@ -44,8 +44,8 @@
 </nav>
 <section id="lessonView" class="card" data-detail-panel="lesson"><div class="card-heading"><div><span class="eyebrow">STRUCTURED LECTURE</span><h2>Lesson overview</h2></div><div class="actions"><button id="exportLesson" type="button">Download notes</button><button id="printLesson" type="button">Print / PDF</button></div></div><p id="lessonMeta" class="muted"></p><nav id="lessonContents" aria-label="Lesson contents"></nav><div id="lessonSections"></div></section>
 <div id="teacherReview" hidden>
-<section class="card" data-detail-panel="review" hidden><div class="card-heading"><div><span class="eyebrow">QUALITY REVIEW</span><h2>Transcript &amp; five checks</h2></div><span id="checkCount" class="pill"></span></div>
-<p class="muted">Compare the flagged passages with the source recording before approving the lesson.</p><progress id="reviewProgress" value="0" max="5"></progress><button type="button" id="process" class="primary">Transcribe and build lesson</button><p id="workStatus" role="status"></p>
+<section class="card" data-detail-panel="review" hidden><div class="card-heading"><div><span class="eyebrow">QUALITY REVIEW</span><h2>Transcript &amp; review findings</h2></div><span id="checkCount" class="pill"></span></div>
+<p class="muted">Five review categories are collected from segment-level checks. Compare the flagged passages with the source recording before approving the lesson.</p><progress id="reviewProgress" value="0" max="5"></progress><button type="button" id="process" class="primary">Process in background</button><p id="workStatus" role="status"></p>
 <ol id="checkList" class="review-list"></ol><details id="transcriptPanel"><summary>Original transcript</summary><div class="actions"><button id="copyTranscript" type="button">Copy transcript</button></div><pre id="transcript"></pre></details></section>
 <form id="outlineForm" class="card" data-detail-panel="edit" hidden><div class="card-heading"><div><span class="eyebrow">TEACHER EDITOR</span><h2>Shape the lesson</h2></div><span id="editState" class="pill">Saved</span></div><p class="muted">Edit the summary, takeaways and headings. Reorder sections to match your teaching flow.</p><label>Lecture title<input name="title" maxlength="150" required></label><div id="outline"></div><div class="actions editor-actions"><button type="button" id="addSection">Add section</button><button class="primary">Save edits</button></div></form>
 <section class="card" data-detail-panel="notes" hidden><h2>Student notes</h2><p class="muted">Notes shared by students enrolled in this classroom.</p><div id="teacherNotes"></div></section>

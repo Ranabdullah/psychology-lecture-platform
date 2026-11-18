@@ -30,6 +30,9 @@ let uploadInProgress=false;
 let working=false;
 let pendingChanges=false;
 let timer;
+let backgroundTimer;
+let pipelineState={job:null,clips:[]};
+const jobBusy=()=>pipelineState.job&&["queued","running","retrying"].includes(pipelineState.job.status);
 const chunkSize=1048576;
 const maxAudio=chunkSize*8;
 const fragment=new URLSearchParams(location.hash.slice(1));
@@ -65,7 +68,7 @@ async function run(action){
 }
 function route(id){
   for(const current of ['auth','workspace','recorder','detail']) $('#'+current).hidden=current!==id;
-  if(id!=='detail') $('#sourceAudio').removeAttribute('src');
+  if(id!=='detail'){$('#sourceAudio').removeAttribute('src');clearInterval(backgroundTimer);}
   window.scrollTo(0,0);
 }
 function toggleAuth(register){
@@ -192,57 +195,35 @@ $('#newLecture').onclick=()=>{
   recordForm.reset();uploadingId=null;
   route('recorder');status('');
 };
-function rememberAudio(blob,mime){
-  audio={blob,mime};
-  if(playbackURL) URL.revokeObjectURL(playbackURL);
-  playbackURL=URL.createObjectURL(blob);
-  $('#localAudio').src=playbackURL;
-  $('#localAudio').hidden=false;
-  $('#downloadAudio').href=playbackURL;
-  $('#downloadAudio').download='lecture.'+({ 'audio/mp4':'m4a','audio/wav':'wav','audio/mpeg':'mp3','audio/ogg':'ogg'}[mime]||'webm');
-  $('#downloadAudio').hidden=false;
-  $('#audioSelection').textContent=Math.round(blob.size/1024)+' KB ready to save';
-  $('#saveRecording').disabled=blob.size>maxAudio;
-  if(blob.size>maxAudio)status('This recording exceeds 8 MB. Download the backup and split it before uploading.',true);
+const capture=window.LectureCapture;
+const recoveryOwner=()=>home?.me?.email||'';
+let segmentPlayback=0;
+function showLocalAudio(){
+  if(playbackURL)URL.revokeObjectURL(playbackURL);
+  const first=audio?.clips[0];if(first){playbackURL=URL.createObjectURL(first.blob);$('#localAudio').src=playbackURL;$('#localAudio').hidden=false;}
+  $('#downloadAudio').hidden=!first;$('#downloadAudio').href='#';$('#downloadAudio').textContent='Download recovery ZIP';
+  const size=(audio?.clips||[]).reduce((n,c)=>n+c.blob.size,0);$('#audioSelection').textContent=(audio?.clips.length||0)+' segment(s) · '+Math.round(size/1024)+' KB ready to save';
+  $('#saveRecording').disabled=!first||size>capture.maxTotal;
 }
+$('#downloadAudio').onclick=event=>{event.preventDefault();run(async()=>{if(!audio?.clips.length)return;const blob=await capture.zip(audio.clips),url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download='Lecture-Studio-recovery.zip';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});};
+$('#recoverRecording').onclick=()=>run(async()=>{const saved=await capture.recovery(recoveryOwner(),'get');if(!saved?.clips?.length)return status('No local recording recovery was found for this account.');if(audio&&!confirm('Replace the unsaved selection with the local recovery?'))return;audio={clips:saved.clips};recordForm.elements.title.value=saved.title||'';showLocalAudio();status('Local recording recovered. Review and save it to your classroom.');});
 $('#startRecording').onclick=()=>run(async()=>{
-  if(!recordForm.elements.consent.checked) return recordForm.elements.consent.reportValidity();
-  if(audio&&!confirm('Replace this unsaved recording?'))return;
-  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder) throw new Error('Microphone recording is unavailable. Choose an audio file instead.');
-  mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
-  const preferred=['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus'].find(type=>MediaRecorder.isTypeSupported(type));
-  try{recorder=new MediaRecorder(mediaStream,{audioBitsPerSecond:32000,...(preferred?{mimeType:preferred}:{})});}
-  catch(error){mediaStream.getTracks().forEach(track=>track.stop());throw error;}
-  const parts=[];
-  let size=0;
-  recorder.ondataavailable=event=>{
-    if(event.data.size){parts.push(event.data);size+=event.data.size;}
-    if(size>=maxAudio*0.96&&recorder.state==='recording') recorder.stop();
-  };
-  recorder.onstop=()=>{
-    clearInterval(timer);
-    mediaStream.getTracks().forEach(track=>track.stop());
-    $('#startRecording').disabled=false;$('#stopRecording').disabled=true;$('#audioFile').disabled=false;
-    $('#saveRecording').disabled=false;
-    $('#pauseRecording').hidden=true;
-    const mime=recorder.mimeType.split(';')[0]||'audio/webm';
-    rememberAudio(new Blob(parts,{type:mime}),mime);
-  };
-  recorder.onerror=()=>{status('The microphone stopped unexpectedly.',true);if(['recording','paused'].includes(recorder.state))recorder.stop();};
-  recorder.start(1000);
-  const started=Date.now();
-  $('#recordTime').textContent='00:00';
-  timer=setInterval(()=>{
-    const seconds=Math.floor((Date.now()-started-pausedMilliseconds-(pauseStarted?Date.now()-pauseStarted:0))/1000);
-    $('#recordTime').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
-  },250);
-  pausedMilliseconds=0;
-  pauseStarted=0;
-  $('#pauseRecording').hidden=false;
-  $('#pauseRecording').textContent='Pause';
-  uploadingId=null;
-  $('#startRecording').disabled=true;$('#stopRecording').disabled=false;$('#audioFile').disabled=true;$('#saveRecording').disabled=true;
-  status('Recordingâ€¦');
+  if(!recordForm.elements.consent.checked)return recordForm.elements.consent.reportValidity();
+  const old=await capture.recovery(recoveryOwner(),'get').catch(()=>null);
+  if((audio||old?.clips?.length)&&!confirm('Start a new recording and replace the existing local recovery? Download a recovery ZIP first if needed.'))return;
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error('Microphone recording is unavailable. Choose audio clips instead.');
+  $('#startRecording').disabled=true;
+  try{mediaStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});}catch(failure){$('#startRecording').disabled=false;throw failure;}
+  audio={clips:[]};uploadingId=null;
+  recorder=new capture.RollingRecorder(mediaStream,{
+    onsegment:async clip=>{audio.clips.push(clip);showLocalAudio();$('#saveRecording').disabled=true;if(audio.clips.reduce((n,c)=>n+c.blob.size,0)>=capture.maxTotal*.94)recorder.stop();await capture.recovery(recoveryOwner(),'put',{clips:audio.clips,title:recordForm.elements.title.value}).catch(()=>status('Local recovery could not be saved. Download the recovery ZIP before leaving.',true));},
+    onstop:()=>{clearInterval(timer);$('#startRecording').disabled=false;$('#stopRecording').disabled=true;$('#audioFile').disabled=false;$('#pauseRecording').hidden=true;showLocalAudio();status('Recording stopped. Save all segments to continue.');},
+    onerror:failure=>status(failure.message,true)
+  });
+  recorder.start();const started=Date.now();pausedMilliseconds=0;pauseStarted=0;
+  $('#recordTime').textContent='00:00';timer=setInterval(()=>{const seconds=Math.floor((Date.now()-started-pausedMilliseconds-(pauseStarted?Date.now()-pauseStarted:0))/1000);$('#recordTime').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');},250);
+  $('#pauseRecording').hidden=false;$('#pauseRecording').textContent='Pause';$('#stopRecording').disabled=false;$('#audioFile').disabled=true;$('#saveRecording').disabled=true;
+  status('Recording… Segments save locally every two minutes. Keep this page open.');
 });
 let pauseStarted=0;
 let pausedMilliseconds=0;
@@ -254,41 +235,47 @@ $('#pauseRecording').onclick=()=>{
   }
 };
 $('#stopRecording').onclick=()=>{if(recorder&&['recording','paused'].includes(recorder.state)){recorder.stop();status('Recording stopped. Save it to continue.');}};
-$('#audioFile').onchange=event=>{
-  const file=event.target.files[0];
-  if(!file)return;
-  const mime=file.type==='video/webm'?'audio/webm':file.type;
-  if(!['audio/webm','audio/ogg','audio/mp4','audio/wav','audio/mpeg'].includes(mime))return status('Choose a WebM, Ogg, M4A, WAV or MP3 audio file.',true);
-  uploadingId=null;status('');rememberAudio(file,mime);
-};
+$('#audioFile').onchange=event=>run(async()=>{
+  const files=[...event.target.files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));if(!files.length)return;
+  if(files.length>60||files.reduce((n,f)=>n+f.size,0)>capture.maxTotal)throw new Error('Choose at most 60 clips totalling up to 64 MB.');
+  const clips=[];let offset=0;
+  for(const file of files){
+    const mime=file.type==='video/webm'?'audio/webm':file.type;
+    if(!['audio/webm','audio/ogg','audio/mp4','audio/wav','audio/mpeg'].includes(mime)||file.size>capture.maxSegment)throw new Error('Choose audio clips of up to 8 MB each.');
+    status('Checking '+file.name+'…');const duration=await capture.duration(file);
+    if(duration>180||duration<=0)throw new Error(file.name+' is longer than three minutes. Split long imports into ordered clips first. New microphone recordings are segmented automatically.');
+    clips.push({blob:file,mime,duration,offset});offset+=duration;
+  }
+  if(offset>7200)throw new Error('A lecture can contain up to 120 minutes of audio.');
+  audio={clips};uploadingId=null;showLocalAudio();status('Audio clips ready in filename order.');
+});
 formHandler(recordForm,async fields=>{
-  if(!audio?.blob.size||audio.blob.size>maxAudio)throw new Error('Record or choose an audio file of up to 8 MB.');
-  uploadInProgress=true;
-  $('#audioFile').disabled=true;$('#startRecording').disabled=true;
+  if(!audio?.clips?.length)throw new Error('Record or choose audio clips first.');
+  uploadInProgress=true;$('#audioFile').disabled=true;$('#startRecording').disabled=true;
   try{
-    if(!uploadingId) uploadingId=(await api('create',{title:fields.title})).id;
-    const count=Math.ceil(audio.blob.size/chunkSize);
-    for(let index=0;index<count;index++){
-      status('Saving recording '+(index+1)+' of '+count+'â€¦');
-      await api('lecture/'+uploadingId+'/audio/'+index,undefined,{method:'POST',body:audio.blob.slice(index*chunkSize,(index+1)*chunkSize)});
+    if(!uploadingId)uploadingId=(await api('create',{title:fields.title})).id;
+    for(const [clipIndex,clip] of audio.clips.entries()){
+      const count=Math.ceil(clip.blob.size/chunkSize);
+      for(let part=0;part<count;part++){status('Saving segment '+(clipIndex+1)+' of '+audio.clips.length+' · part '+(part+1)+' of '+count+'…');await api('lecture/'+uploadingId+'/clips/'+clipIndex+'/part/'+part,undefined,{method:'POST',body:clip.blob.slice(part*chunkSize,(part+1)*chunkSize)});}
+      await api('lecture/'+uploadingId+'/clips/'+clipIndex+'/finish',{count,mime:clip.mime,offset:clip.offset,duration:clip.duration});
     }
-    const target=uploadingId;
-    await api('lecture/'+target+'/finish',{count,mime:audio.mime});
-    if(playbackURL)URL.revokeObjectURL(playbackURL);
-    $('#localAudio').removeAttribute('src');$('#localAudio').hidden=true;$('#downloadAudio').hidden=true;
-    $('#audioSelection').textContent='';$('#recordTime').textContent='00:00';
-    audio=null;uploadingId=null;playbackURL=null;
-    status('Recording saved.');
-    await openLecture(target);
+    const target=uploadingId;await api('lecture/'+target+'/finish_set',{count:audio.clips.length});
+    await capture.recovery(recoveryOwner(),'delete').catch(()=>{});
+    if(playbackURL)URL.revokeObjectURL(playbackURL);$('#localAudio').removeAttribute('src');$('#localAudio').hidden=true;$('#downloadAudio').hidden=true;$('#audioSelection').textContent='';$('#recordTime').textContent='00:00';audio=null;uploadingId=null;playbackURL=null;
+    status('All recording segments saved.');await openLecture(target);
   }finally{uploadInProgress=false;$('#audioFile').disabled=false;$('#startRecording').disabled=false;}
 });
 async function openLecture(id){
   lecture=await api('lecture/'+id);
   $('#lectureTitle').textContent=lecture.title;
   $('#lectureStatus').textContent=lecture.published?'Published to enrolled students':'Draft Â· teacher access';
+  pipelineState=window.LectureDemo?{job:null,clips:[]}:await api('lecture/'+id+'/status');
   const source=$('#sourceAudio');
-  source.hidden=!lecture.audio_parts;
-  $('#audioUnavailable').hidden=!!lecture.audio_parts;
+  source.hidden=!lecture.audio_parts&&!pipelineState.clips.length;
+  $('#audioUnavailable').hidden=!!lecture.audio_parts||!!pipelineState.clips.length;
+  $('#clipPickerLabel').hidden=!pipelineState.clips.length;
+  $('#clipPicker').replaceChildren(...pipelineState.clips.map(row=>{const item=node('option','Segment '+(row.clip+1)+' · '+Math.floor(row.offset/60)+':'+String(Math.floor(row.offset%60)).padStart(2,'0'));item.value=row.clip;return item}));
+  if(pipelineState.clips.length){source.src='/api/lecture/'+id+'/clips/0';$('#clipPicker').onchange=()=>{source.src='/api/lecture/'+id+'/clips/'+$('#clipPicker').value;};}
   if(lecture.audio_parts)source.src=window.LectureDemo?'example-lecture.wav':'/api/lecture/'+id+'/audio';
   const teacher=home.me.role==='teacher';
   $('#teacherReview').hidden=!teacher;
@@ -316,6 +303,8 @@ async function openLecture(id){
   renderLesson();
   detailTab('lesson');
   route('detail');
+  renderBackground();clearInterval(backgroundTimer);
+  if(!window.LectureDemo&&home.me.role==='teacher')backgroundTimer=setInterval(()=>run(refreshBackground),5000);
 }
 function detailTab(tab){
   for(const button of document.querySelectorAll('[data-detail-tab]'))button.setAttribute('aria-pressed',button.dataset.detailTab===tab);
@@ -373,20 +362,21 @@ function renderChecks(){
   if(!list.children.length)list.append(node('li','Transcription has not started.'));
   $('#transcript').textContent=lecture.transcript||'The first transcription will appear here.';
   $('#process').hidden=!!lecture.published||lecture.checks?.length===5;
-  $('#process').disabled=working||!lecture.audio_parts;
+  if(jobBusy()&&Date.now()-new Date(pipelineState.job.updated_at).getTime()<10*60*1000)$('#process').hidden=true;
+  $('#process').disabled=working||(!lecture.audio_parts&&!pipelineState.ready);
   const count=lecture.checks?.length||0;
-  $('#process').textContent=lecture.transcript?'Continue review & build lesson':'Transcribe & build lesson';
+  $('#process').textContent=pipelineState.job?.status==='failed'?'Retry background processing':jobBusy()?'Resume stalled processing':'Process in background';
   $('#checkCount').textContent=count+' of 5 complete';
   $('#reviewProgress').value=count;
-  for(const control of outlineForm.querySelectorAll('input,textarea,button'))control.disabled=working;
-  $('#deleteLecture').disabled=working;
+  for(const control of outlineForm.querySelectorAll('input,textarea,button'))control.disabled=working||!!jobBusy();
+  $('#deleteLecture').disabled=working||!!jobBusy();
   $('#share').hidden=!lecture.published;
   $('#reviewConfirm').hidden=!!lecture.published;
   $('#publish').hidden=!!lecture.published;
   updatePublish();
 }
 function updatePublish(){
-  $('#publish').disabled=working||pendingChanges||lecture?.checks?.length!==5||!$('#teacherConfirmed').checked;
+  $('#publish').disabled=working||!!jobBusy()||pendingChanges||lecture?.checks?.length!==5||!$('#teacherConfirmed').checked;
   $('#editState').textContent=pendingChanges?'Unsaved changes':'Saved';
 }
 $('#teacherConfirmed').onchange=updatePublish;
@@ -414,7 +404,7 @@ function renderOutline(){
 }
 outlineForm.oninput=()=>{pendingChanges=true;updatePublish();};
 $('#addSection').onclick=()=>{
-  if($('#outline').children.length>=40)return status('The lecture can have up to 40 sections.',true);
+  if($('#outline').children.length>=120)return status('The lecture can have up to 120 sections.',true);
   sectionInput();pendingChanges=true;updatePublish();
 };
 formHandler(outlineForm,async fields=>{
@@ -424,27 +414,30 @@ formHandler(outlineForm,async fields=>{
   await openLecture(lecture.id);
   status('Lecture edits saved.');
 });
+function renderBackground(){
+  const job=pipelineState.job;$('#backgroundStatus').hidden=!job||home.me.role!=='teacher';
+  if(!job)return;
+  $('#backgroundMessage').textContent=job.message+' · '+job.status;
+  $('#workStatus').textContent=job.message;
+  $('#backgroundProgress').value=job.status==='complete'?100:Math.min(95,Math.round(job.cursor/(job.total+Math.ceil(job.total/8)+1)*100));
+  const rows=$('#segmentFindings');rows.replaceChildren();
+  for(const clip of pipelineState.clips.filter(c=>c.findings?.length)){const details=document.createElement('details');details.append(node('summary','Segment '+(clip.clip+1)+' · source review'));for(const finding of clip.findings)for(const [label,value] of Object.entries(finding))details.append(node('p',label+': '+value,'muted'));rows.append(details);}
+}
+async function refreshBackground(){
+  if(!lecture||$('#detail').hidden)return;
+  const was=pipelineState.job?.status;
+  pipelineState=await api('lecture/'+lecture.id+'/status');
+  renderBackground();renderChecks();
+  if(pipelineState.job?.status==='complete'&&was!=='complete'){
+    lecture=await api('lecture/'+lecture.id);renderLesson();renderOutline();renderChecks();status('Lesson ready. Review the source recording and notes before publishing.');
+    if(window.Notification?.permission==='granted')try{new Notification('Lecture Studio',{body:'Your lesson is ready for teacher review.'})}catch{}
+  }
+}
+$('#notifyProcessing').onclick=()=>run(async()=>{if(!('Notification' in window))return status('This browser does not support page completion alerts. Saved progress is available when you return.');const result=await Notification.requestPermission();status(result==='granted'?'Completion alerts enabled while this page is open.':'Alerts were not enabled. Processing progress stays saved online.');});
 $('#process').onclick=()=>run(async()=>{
-  if(working)return;
-  if(pendingChanges&&!confirm('Start review passes and replace unsaved edits?')) return;
-  working=true;
-  renderChecks();
-  const id=lecture.id;
-  try{
-    let step=lecture.checks?.length||0;
-    while(step<5){
-      $('#workStatus').textContent='Working through the transcript. '+step+' of 5 review passes saved.';
-      const result=await api('lecture/'+id+'/process',{});
-      step=result.step;
-      lecture=await api('lecture/'+id);
-      renderChecks();
-    }
-    $('#workStatus').textContent='Five passes saved. Listen to flagged passages and edit the lecture before publishing.';
-    pendingChanges=false;
-    renderOutline();
-    renderLesson();
-    detailTab('lesson');
-  } finally {working=false;renderChecks();}
+  if(working)return;if(pendingChanges&&!confirm('Processing will replace the unsaved draft. Continue?'))return;
+  working=true;renderChecks();
+  try{await api('lecture/'+lecture.id+'/process',{});pendingChanges=false;await refreshBackground();status('Processing started in the background. You can close this tab and return later.');}finally{working=false;renderChecks();}
 });
 $('#publish').onclick=()=>run(async()=>{
   if(!$('#teacherConfirmed').checked||pendingChanges||working)return;

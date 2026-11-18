@@ -1,9 +1,9 @@
 # Lecture Studio
 
-A private classroom app that records or uploads lectures, transcribes the audio, saves five review passes, and gives the teacher an editable lesson with a summary, key takeaways and topic headings to publish. Students join by private invitation, read published lectures and write notes for their teacher.
+A private classroom app for segmented recording, background transcription and reviewed lecture notes. Teachers publish summaries, key takeaways and topic headings; invited students read lessons and share notes with their teacher.
 
+- [Try the example lesson](https://lecture-studio.ranakaharian1.workers.dev/?demo=1)
 - [Open Lecture Studio](https://lecture-studio.ranakaharian1.workers.dev/)
-- [Classroom setup and teacher walkthrough](classroom/README.md)
-- [Try the example lecture](https://lecture-studio.ranakaharian1.workers.dev/?demo=1)
+- [Features, usage, setup and validation](classroom/README.md)
 
-The current classroom edition is in `classroom/` and runs on Cloudflare Workers, Workers AI and an isolated Supabase PostgreSQL schema. The original Next.js implementation remains under `src/`; its developer setup is in [README-FIRST.md](README-FIRST.md).
+The current classroom edition is in classroom/. It uses Cloudflare Workers, Workers AI and Queues with an isolated Supabase PostgreSQL schema. Recording/uploading needs an open browser; queued processing continues after the tab closes. Original Next.js source remains under src/; developer notes are in [README-FIRST.md](README-FIRST.md).

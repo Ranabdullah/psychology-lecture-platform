@@ -3,12 +3,63 @@
   "main": "worker.mjs",
   "compatibility_date": "2026-11-16",
   "preview_urls": false,
-  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
-  "ai": { "binding": "AI" },
-  "observability": {"enabled":false},
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    },
+    "redact_query_string": true
+  },
   "ratelimits": [
-    {"name":"AUTH_LIMIT","namespace_id":"78123","simple":{"limit":8,"period":60}},
-    {"name":"WORK_LIMIT","namespace_id":"78124","simple":{"limit":18,"period":60}}
+    {
+      "name": "AUTH_LIMIT",
+      "namespace_id": "78123",
+      "simple": {
+        "limit": 8,
+        "period": 60
+      }
+    },
+    {
+      "name": "WORK_LIMIT",
+      "namespace_id": "78124",
+      "simple": {
+        "limit": 18,
+        "period": 60
+      }
+    }
   ],
-  "vars": {"SUPABASE_URL":"", "SUPABASE_PUBLISHABLE_KEY":""}
+  "vars": {
+    "SUPABASE_URL": "",
+    "SUPABASE_PUBLISHABLE_KEY": ""
+  },
+  "queues": {
+    "producers": [
+      {
+        "queue": "lecture-studio-processing",
+        "binding": "PROCESS_QUEUE"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "lecture-studio-processing",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 4,
+        "retry_delay": 60,
+        "max_concurrency": 1
+      }
+    ]
+  }
 }

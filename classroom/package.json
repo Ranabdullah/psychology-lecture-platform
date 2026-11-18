@@ -1,0 +1,12 @@
+{
+  "name": "lecture-studio-classroom",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "check": "node --check worker.mjs && node --check pipeline.mjs && node --check public/app.js && node --check public/capture.js",
+    "test": "node tests/pipeline.mjs",
+    "setup": "node setup.mjs"
+  },
+  "devDependencies": { "wrangler": "4.162.0" }
+}
